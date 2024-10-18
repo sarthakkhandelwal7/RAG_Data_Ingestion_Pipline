@@ -22,7 +22,6 @@ def get_parameter(name, with_decryption=False):
         return None
 
 def main():
-    # Set environment variables or use defaults for local testing
     s3_bucket_name = os.environ.get('S3_BUCKET_NAME', 'design-documents-bucket')
     pinecone_api_key_param = os.environ.get('PINECONE_API_KEY_PARAM', '/rag_data_ingestion/dev/pinecone_api_key')
     openai_api_key_param = os.environ.get('OPENAI_API_KEY_PARAM', '/rag_data_ingestion/dev/openai_api_key')
@@ -47,10 +46,10 @@ def main():
         pc.create_index(
             name=index_name,
             dimension=1536,
-            metric='cosine',  # or 'euclidean', depending on your preference
+            metric='cosine',  
             spec=ServerlessSpec(
                 cloud='aws',
-                region=PINECONE_ENVIRONMENT  # Ensure this matches your Pinecone environment
+                region=PINECONE_ENVIRONMENT
             )
         )
     index = pc.Index(index_name)

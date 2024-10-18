@@ -1,8 +1,7 @@
 # main.tf
 
 provider "aws" {
-  region = var.aws_region  # Use the variable from variables.tf
-}
+  region = var.aws_region  
 
 # Data source to get AWS account ID
 data "aws_caller_identity" "current" {}
@@ -40,6 +39,3 @@ resource "aws_ssm_parameter" "pinecone_environment" {
   value       = var.pinecone_environment
   overwrite   = true
 }
-
-# IAM Policy (if needed)
-# For example, if you have any IAM policies that need the AWS Account ID, use the data source directly
