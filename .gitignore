@@ -4,6 +4,7 @@
 *.tfstate.backup
 *.tfplan
 .terraform.lock.hcl
+terraform-pipline/terraform.tfvars
 
 # Python
 __pycache__/
