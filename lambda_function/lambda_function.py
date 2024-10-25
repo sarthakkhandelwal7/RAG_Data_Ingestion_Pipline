@@ -1,13 +1,24 @@
-# main.py
-
 import os
+import json
 import boto3
 from botocore.exceptions import ClientError
-from langchain_community.document_loaders import S3DirectoryLoader
+from langchain_community.document_loaders import UnstructuredHTMLLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
+from langchain_pinecone import PineconeVectorStore
 from pinecone import Pinecone, ServerlessSpec
+import uuid
 
+
+import nltk
+
+nltk_data_dir = '/tmp/nltk_data'
+if not os.path.exists(nltk_data_dir):
+    os.makedirs(nltk_data_dir)
+    
+nltk.data.path.append(nltk_data_dir)
+
+s3_client = boto3.client('s3')
 
 def get_parameter(name, with_decryption=False):
     ssm = boto3.client('ssm')
@@ -21,74 +32,58 @@ def get_parameter(name, with_decryption=False):
         print(f"Error retrieving parameter {name}: {e}")
         return None
 
-def main():
-    s3_bucket_name = os.environ.get('S3_BUCKET_NAME', 'design-documents-bucket')
-    pinecone_api_key_param = os.environ.get('PINECONE_API_KEY_PARAM', '/rag_data_ingestion/dev/pinecone_api_key')
-    openai_api_key_param = os.environ.get('OPENAI_API_KEY_PARAM', '/rag_data_ingestion/dev/openai_api_key')
-    pinecone_env_param = os.environ.get('PINECONE_ENV_PARAM', '/rag_data_ingestion/dev/pinecone_environment')
+def lambda_handler(event, context):
+    # Extract the bucket name and object key from the S3 event
+    print("Records below\n", event['Records'])
+    for record in event['Records']:
+        bucket_name = record['s3']['bucket']['name']
+        object_key = record['s3']['object']['key']
 
-    # Get API keys and environment variables from Parameter Store
-    PINECONE_API_KEY = get_parameter(pinecone_api_key_param, with_decryption=True)
-    OPENAI_API_KEY = get_parameter(openai_api_key_param, with_decryption=True)
-    PINECONE_ENVIRONMENT = get_parameter(pinecone_env_param)
+        # Download the document from S3 to the local /tmp directory
+        download_path = f"/tmp/{object_key.split('/')[-1]}"
+        s3_client.download_file(bucket_name, object_key, download_path)
+        
+        loader = UnstructuredHTMLLoader(download_path)
+        raw_documents = loader.load()
 
-    # Initialize OpenAI Embeddings
-    embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
+        # Split documents into chunks
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=50)
+        documents = text_splitter.split_documents(raw_documents)
 
-    # Initialize Pinecone client
-    pc = Pinecone(api_key=PINECONE_API_KEY)
-    index_name = "design-docs-index"
+        pinecone_api_key = get_parameter(os.environ['PINECONE_API_KEY_PARAM'], with_decryption=True)
+        openai_api_key = get_parameter(os.environ['OPENAI_API_KEY_PARAM'], with_decryption=True)
+        pinecone_environment = get_parameter(os.environ['PINECONE_ENV_PARAM'])
 
-    # Check if index exists
-    existing_indexes = pc.list_indexes().names()
-    if index_name not in existing_indexes:
-        # Create a new index
-        pc.create_index(
-            name=index_name,
-            dimension=1536,
-            metric='cosine',  
-            spec=ServerlessSpec(
-                cloud='aws',
-                region=PINECONE_ENVIRONMENT
+        embeddings = OpenAIEmbeddings(openai_api_key=openai_api_key, model="text-embedding-3-small")
+
+        pc = Pinecone(api_key=pinecone_api_key)
+
+        index_name = "design-docs-index"
+        if index_name not in pc.list_indexes().names():
+            pc.create_index(
+                name=index_name,
+                dimension=1536,
+                metric='cosine',
+                spec=ServerlessSpec(
+                    cloud='aws',
+                    region=pinecone_environment
+                )
             )
-        )
-    index = pc.Index(index_name)
 
-    # Load documents from S3
-    loader = S3DirectoryLoader(bucket=s3_bucket_name)
-    raw_documents = loader.load()
-    print(f"Loaded {len(raw_documents)} documents from S3")
+        index = pc.Index(index_name)
 
-    # Split documents into chunks
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=50)
-    documents = text_splitter.split_documents(raw_documents)
-    print(f"Split into {len(documents)} chunks")
+        print(f"Going to add {len(documents)} to Pinecone")
+        for doc in documents:
+            
+            new_url = doc.metadata["source"]
+            new_url = new_url.replace("langchain-docs", "https:/")
+            doc.metadata.update({"source": new_url})
+            # Check if 'id' exists, if not, generate or extract it from the source
+            if 'id' not in doc.metadata:
+                # For example, use the file name from the 'source' to generate an id
+                doc.metadata['id'] = doc.metadata['id'] = str(uuid.uuid4())  # Remove file extension for id
 
-    # Prepare data for upsert
-    print(f"Total number of documents in S3: {len(documents)} documents")
-    batch_size = 10  # Adjust batch size as needed
-    for i in range(0, len(documents), batch_size):
-        batch = documents[i:i+batch_size]
-        ids = []
-        vectors = []
-        metadata_list = []
+            vector = embeddings.embed_query(doc.page_content)
+            index.upsert(vectors=[(doc.metadata['id'], vector, doc.metadata)], async_req=False)
 
-        for idx, doc in enumerate(batch):
-            # Generate embedding
-            embedding = embeddings.embed_query(doc.page_content)
-
-            # Create unique ID for each chunk
-            doc_id = f"{doc.metadata.get('source', 'doc')}_{i}_{idx}"
-
-            # Prepare data for upsert
-            ids.append(doc_id)
-            vectors.append(embedding)
-            metadata_list.append(doc.metadata)
-
-        # Upsert batch into Pinecone
-        index.upsert(vectors=zip(ids, vectors, metadata_list))
-
-    print("**** Loading to Pinecone vector store done ****")
-
-if __name__ == "__main__":
-    main()
+        print("**** Loading to Pinecone vector store done ****")
