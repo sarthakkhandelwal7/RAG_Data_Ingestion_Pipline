@@ -1,5 +1,4 @@
 import os
-import json
 import boto3
 from botocore.exceptions import ClientError
 from langchain_community.document_loaders import UnstructuredHTMLLoader
@@ -7,9 +6,6 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 from langchain_pinecone import PineconeVectorStore
 from pinecone import Pinecone, ServerlessSpec
-import uuid
-
-
 import nltk
 
 nltk_data_dir = '/tmp/nltk_data'
@@ -54,7 +50,7 @@ def lambda_handler(event, context):
         openai_api_key = get_parameter(os.environ['OPENAI_API_KEY_PARAM'], with_decryption=True)
         pinecone_environment = get_parameter(os.environ['PINECONE_ENV_PARAM'])
 
-        embeddings = OpenAIEmbeddings(openai_api_key=openai_api_key, model="text-embedding-3-small")
+        embedding = OpenAIEmbeddings(openai_api_key=openai_api_key, model="text-embedding-3-small")
 
         pc = Pinecone(api_key=pinecone_api_key)
 
@@ -70,20 +66,19 @@ def lambda_handler(event, context):
                 )
             )
 
-        index = pc.Index(index_name)
-
+        texts = []
+        metadatas = []
         print(f"Going to add {len(documents)} to Pinecone")
         for doc in documents:
             
             new_url = doc.metadata["source"]
             new_url = new_url.replace("langchain-docs", "https:/")
             doc.metadata.update({"source": new_url})
-            # Check if 'id' exists, if not, generate or extract it from the source
-            if 'id' not in doc.metadata:
-                # For example, use the file name from the 'source' to generate an id
-                doc.metadata['id'] = doc.metadata['id'] = str(uuid.uuid4())  # Remove file extension for id
 
-            vector = embeddings.embed_query(doc.page_content)
-            index.upsert(vectors=[(doc.metadata['id'], vector, doc.metadata)], async_req=False)
+            texts.append(doc.page_content)
+            metadatas.append(doc.metadata)
 
+        # PineconeVectorStore.from_texts(texts, embeddings, metadatas=metadatas, async_req=False, index_name="design-docs-index")
+        vector_Store = PineconeVectorStore(index=pc.Index(index_name), embedding=embedding)
+        vector_Store.add_texts(texts, metadatas=metadatas, async_req=False)
         print("**** Loading to Pinecone vector store done ****")
