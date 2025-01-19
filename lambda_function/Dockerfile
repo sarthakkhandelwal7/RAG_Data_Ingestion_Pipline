@@ -1,22 +1,20 @@
-# Use the official Python 3.11 image
-FROM python:3.11.4-slim-buster
+# Use the official AWS Lambda Python 3.11 runtime as the base image
+FROM public.ecr.aws/lambda/python:3.11
 
-# Install AWS Lambda Runtime Interface Client
-RUN pip install awslambdaric
-
-# Set the working directory
+# Set the working directory inside the container
 WORKDIR /var/task
 
-# Copy Pipfile and Pipfile.lock
+# Install Pipenv
+RUN pip install pipenv
+
+# Copy Pipfile and Pipfile.lock to the working directory
 COPY Pipfile Pipfile.lock ./
 
-# Install dependencies using Pipenv
-RUN pip install pipenv
-RUN pipenv install --system --deploy
+# Install the dependencies using Pipenv, ensuring they are installed in the system environment (not a virtual environment)
+RUN pipenv install --system --deploy --ignore-pipfile
 
-# Copy function code
+# Copy the rest of the application code to the working directory
 COPY lambda_function.py ./
 
 # Set the entrypoint for AWS Lambda
-ENTRYPOINT [ "/usr/local/bin/python", "-m", "awslambdaric" ]
-CMD [ "lambda_function.lambda_handler" ]
+CMD ["lambda_function.lambda_handler"]

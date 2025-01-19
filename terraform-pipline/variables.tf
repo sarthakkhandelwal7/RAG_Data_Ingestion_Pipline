@@ -31,3 +31,9 @@ variable "parameter_store_path" {
   type        = string
   default     = "/rag_data_ingestion/dev/"
 }
+
+variable "lambda_image_uri" {
+  description = "The ECR image URI for the Lambda function"
+  type        = string
+}
+
